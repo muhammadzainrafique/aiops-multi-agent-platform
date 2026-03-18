@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiops-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  supervisor:
+    build:
+      context: ../../
+      dockerfile: agents/supervisor/Dockerfile
+    container_name: aiops-supervisor
+    env_file: ../../.env
+    ports:
+      - "5001:5001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ~/.kube:/root/.kube:ro
+    restart: unless-stopped
+
+  evaluator:
+    build:
+      context: ../../
+      dockerfile: agents/evaluator/Dockerfile
+    container_name: aiops-evaluator
+    env_file: ../../.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  resolver:
+    build:
+      context: ../../
+      dockerfile: agents/resolver/Dockerfile
+    container_name: aiops-resolver
+    env_file: ../../.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ~/.kube:/root/.kube:ro
+    restart: unless-stopped
+
+volumes:
+  redis_data:
