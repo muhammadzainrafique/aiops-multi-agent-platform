@@ -11,7 +11,7 @@ to/from JSON for Redis queue transport.
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -26,7 +26,7 @@ class Incident:
     # ── Auto-generated ───────────────────────────────────────────────────────
     id         : str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     created_at : str = field(
-        default_factory=lambda: datetime.utcnow().isoformat()
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
     # ── Populated by Supervisor ──────────────────────────────────────────────

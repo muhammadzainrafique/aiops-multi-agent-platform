@@ -10,7 +10,7 @@ Responsibilities:
      for the Evaluator agent to consume.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 
 from shared.utils.logger import get_logger
@@ -116,5 +116,5 @@ class SupervisorAgent:
             "agent"      : "supervisor",
             "status"     : "healthy" if redis_ok else "degraded",
             "redis"      : "ok" if redis_ok else "unreachable",
-            "timestamp"  : datetime.utcnow().isoformat(),
+            "timestamp"  : datetime.now(timezone.utc).isoformat(),
         }
