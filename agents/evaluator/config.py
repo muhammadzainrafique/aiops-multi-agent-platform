@@ -16,7 +16,8 @@ LLM_TEMPERATURE    = float(os.getenv("LLM_TEMPERATURE", 0.2))
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+_redis_port = os.getenv("REDIS_PORT", "6379")
+REDIS_PORT = int(_redis_port.split(":")[-1]) if "tcp" in str(_redis_port) else int(_redis_port)
 REDIS_DB   = int(os.getenv("REDIS_DB", 0))
 
 # ── Queue behaviour ───────────────────────────────────────────────────────────
