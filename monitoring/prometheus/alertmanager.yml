@@ -1,0 +1,34 @@
+# monitoring/prometheus/alertmanager.yml
+# AlertManager configuration — routes all alerts to the Supervisor webhook.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # Default receiver for all alerts
+  receiver: "aiops-supervisor"
+  group_by: ["alertname", "namespace", "pod"]
+  group_wait:      10s    # Wait 10s to batch alerts before sending
+  group_interval:  1m     # Wait 1m before sending updates to a group
+  repeat_interval: 10m    # Re-send unresolved alerts every 10 minutes
+
+  routes:
+    # Critical alerts — send immediately with no grouping wait
+    - matchers:
+        - severity="critical"
+      receiver: "aiops-supervisor"
+      group_wait: 0s
+
+    # Warning alerts — slightly delayed to allow batching
+    - matchers:
+        - severity="warning"
+      receiver: "aiops-supervisor"
+      group_wait: 30s
+
+receivers:
+  - name: "aiops-supervisor"
+    webhook_configs:
+      - url: "http://localhost:5001/webhook"
+        send_resolved: true    # Also notify when alert resolves
+        http_config:
+          follow_redirects: true

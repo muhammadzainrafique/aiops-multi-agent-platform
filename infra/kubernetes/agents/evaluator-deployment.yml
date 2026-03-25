@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evaluator
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evaluator
+  template:
+    metadata:
+      labels:
+        app: evaluator
+    spec:
+      serviceAccountName: aiops-agent
+      containers:
+        - name: evaluator
+          image: aiops-evaluator:latest
+          imagePullPolicy: Never
+          env:
+            - name: REDIS_HOST
+              value: "redis"
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aiops-secrets
+                  key: GROQ_API_KEY
+            - name: GROQ_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: aiops-secrets
+                  key: GROQ_MODEL
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"

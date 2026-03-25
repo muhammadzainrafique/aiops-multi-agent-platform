@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resolver
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: resolver
+  template:
+    metadata:
+      labels:
+        app: resolver
+    spec:
+      serviceAccountName: aiops-agent
+      containers:
+        - name: resolver
+          image: aiops-resolver:latest
+          imagePullPolicy: Never
+          env:
+            - name: REDIS_HOST
+              value: "redis"
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aiops-secrets
+                  key: GROQ_API_KEY
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"

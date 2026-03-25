@@ -1,19 +1,26 @@
 # monitoring/prometheus/prometheus.yml
-# Prometheus scrape configuration for the AIOps platform
-
 global:
   scrape_interval:     15s
   evaluation_interval: 15s
 
+# ── AlertManager integration ──────────────────────────────────────────────────
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:9093"   # AlertManager address
+
+# ── Alert rules file ──────────────────────────────────────────────────────────
+rule_files:
+  - "/etc/prometheus/alert_rules.yml"
+
+# ── Scrape targets ────────────────────────────────────────────────────────────
 scrape_configs:
 
-  # Scrape Prometheus itself
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
 
-  # Scrape all Kubernetes pods that have the annotation:
-  # prometheus.io/scrape: "true"
   - job_name: "kubernetes-pods"
     kubernetes_sd_configs:
       - role: pod
@@ -31,7 +38,6 @@ scrape_configs:
         replacement: $1:$2
         target_label: __address__
 
-  # Scrape Kubernetes node metrics (kubelet)
   - job_name: "kubernetes-nodes"
     scheme: https
     tls_config:

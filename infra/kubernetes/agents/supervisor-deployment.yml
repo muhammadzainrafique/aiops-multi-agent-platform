@@ -1,0 +1,70 @@
+# infra/kubernetes/agents/supervisor-deployment.yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supervisor
+  namespace: default
+  labels:
+    app: supervisor
+    component: aiops-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: supervisor
+  template:
+    metadata:
+      labels:
+        app: supervisor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5001"
+    spec:
+      serviceAccountName: aiops-agent
+      containers:
+        - name: supervisor
+          image: aiops-supervisor:latest
+          imagePullPolicy: Never       # Use local Minikube image
+          ports:
+            - containerPort: 5001
+          env:
+            - name: REDIS_HOST
+              value: "redis"
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aiops-secrets
+                  key: GROQ_API_KEY
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supervisor
+  namespace: default
+spec:
+  selector:
+    app: supervisor
+  ports:
+    - port: 5001
+      targetPort: 5001
+  type: ClusterIP
