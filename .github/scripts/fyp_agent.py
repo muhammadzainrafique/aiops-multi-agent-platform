@@ -23,7 +23,7 @@ COMMITTER_NAME    = os.environ["COMMITTER_NAME"]
 REPO_NAME         = os.environ["REPO_NAME"]
 BRANCH_NAME       = os.environ["BRANCH_NAME"]
 
-COPILOT_API_URL   = "https://api.githubcopilot.com/chat/completions"
+COPILOT_API_URL   = "https://models.inference.ai.azure.com/chat/completions"
 SHORT_SHA         = COMMIT_SHA[:7]
 COMMIT_URL        = f"https://github.com/{REPO_NAME}/commit/{COMMIT_SHA}"
 
@@ -46,7 +46,6 @@ def call_copilot(system_prompt: str, user_prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {COPILOT_API_KEY}",
         "Content-Type": "application/json",
-        "Copilot-Integration-Id": "fyp-agent",
     }
     payload = {
         "model": "gpt-4o",
