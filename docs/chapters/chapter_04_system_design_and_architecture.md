@@ -137,3 +137,4 @@ For the AI-powered DevOps multi-agent platform, Chapter 4 should cover:
 
 *This file is auto-maintained by FYP Agent. Run `/docs` after each commit for updates.*
 | 2026-03-26 | 3bdb6f2 | /architecture, architecture.py | See Discord for guidance |
+| 2026-03-26 | 3bdb6f2 | architecture.py, /architecture | See Discord for guidance |
