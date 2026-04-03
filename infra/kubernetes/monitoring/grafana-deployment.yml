@@ -1,4 +1,86 @@
-# infra/kubernetes/monitoring/grafana-deployment.yml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-config
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: aiops
+        folder: AIOps
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-aiops
+  namespace: monitoring
+data:
+  aiops.json: |
+    {
+      "title": "AIOps Platform",
+      "uid": "aiops-main",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Pod Restart Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{
+            "expr": "rate(kube_pod_container_status_restarts_total[5m]) * 300",
+            "legendFormat": "{{pod}}"
+          }],
+          "datasource": "Prometheus"
+        },
+        {
+          "id": 2,
+          "title": "Pods Not Ready",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "targets": [{
+            "expr": "count(kube_pod_status_ready{condition='true'} == 0) or vector(0)",
+            "legendFormat": "Unhealthy Pods"
+          }],
+          "datasource": "Prometheus"
+        },
+        {
+          "id": 3,
+          "title": "Total Pod Restarts (last 1h)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+          "targets": [{
+            "expr": "sum(increase(kube_pod_container_status_restarts_total[1h]))",
+            "legendFormat": "Restarts"
+          }],
+          "datasource": "Prometheus"
+        }
+      ],
+      "schemaVersion": 38,
+      "version": 1
+    }
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,7 +106,32 @@ spec:
               value: "aiops2026"
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "true"
-    
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-config
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-config
+          configMap:
+            name: grafana-dashboards-config
+        - name: dashboards
+          configMap:
+            name: grafana-dashboard-aiops
 
 ---
 apiVersion: v1
@@ -38,4 +145,4 @@ spec:
   ports:
     - port: 3000
       targetPort: 3000
-  type: NodePort
+  type: ClusterIP

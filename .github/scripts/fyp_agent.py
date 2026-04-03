@@ -40,7 +40,6 @@ def get_diff() -> str:
         diff = diff[:12000] + "\n\n... (diff truncated for brevity)"
     return diff if diff else "No Python file changes detected in this commit."
 
-
 # ── 2. Call Copilot API ───────────────────────────────────────────────────────
 def call_copilot(system_prompt: str, user_prompt: str) -> str:
     headers = {
@@ -163,6 +162,105 @@ def update_changelog(tech_summary: str, plain_summary: str):
 
     print("✅ CHANGELOG.md updated.")
 
+"""
+Addition to fyp_agent.py — auto-update chapter doc files on every commit.
+Add this function and call it from __main__ block.
+"""
+
+def auto_update_chapter_docs(tech_summary: str, changed_files: list):
+    """
+    Called from GitHub Actions on every commit.
+    Posts to Discord which chapters need updating and @mentions the documenter.
+    """
+    DISCORD_WEBHOOK   = os.environ["DISCORD_WEBHOOK_URL"]
+    DOCUMENTER_ID     = os.environ.get("DOCUMENTER_DISCORD_ID", "")
+    GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", os.environ.get("COPILOT_API_KEY"))
+    GITHUB_REPO       = os.environ["REPO_NAME"]
+    GITHUB_BRANCH     = os.environ.get("BRANCH_NAME", "main")
+
+    # Map changed files to chapters
+    chapter_mapping = {}
+    for ch_num, ch in CHAPTERS.items():
+        matched = [
+            f for f in changed_files
+            if any(kw.lower() in f.lower() for kw in ch["keywords"])
+        ]
+        if matched:
+            chapter_mapping[ch_num] = matched
+    unmatched = [f for files in chapter_mapping.values() for f in files]
+    leftover  = [f for f in changed_files if f not in unmatched]
+    if leftover:
+        chapter_mapping.setdefault(5, []).extend(leftover)
+
+    if not chapter_mapping:
+        return
+
+    mention = f"<@{DOCUMENTER_ID}>" if DOCUMENTER_ID else "📝 **Documenter**"
+    chapters_str = ", ".join([
+        f"Ch.{n} {CHAPTERS[n]['title']}" for n in chapter_mapping
+    ])
+
+    embeds = [
+        {
+            "title": "📚 Documentation Update Required",
+            "description": (
+                f"{mention} — a new commit needs documentation updates!\n\n"
+                f"**Chapters affected:** {chapters_str}\n\n"
+                f"Run `/docs` in Discord for detailed guidance on what to write."
+            ),
+            "color": 0xEB459E,
+            "fields": [
+                {
+                    "name": f"📖 Chapter {ch_num}: {CHAPTERS[ch_num]['title']}",
+                    "value": "Files: " + ", ".join([f"`{f}`" for f in files[:4]]),
+                    "inline": False,
+                }
+                for ch_num, files in chapter_mapping.items()
+            ],
+            "footer": {"text": f"{GITHUB_REPO} • Run /docs status to see overall progress"},
+        }
+    ]
+
+    payload = {
+        "content": f"{mention} New commit needs documentation! Run `/docs` for details.",
+        "embeds": embeds,
+    }
+    resp = requests.post(DISCORD_WEBHOOK, json=payload, timeout=30)
+    if resp.status_code in (200, 204):
+        print("✅ Doc update alert posted to Discord.")
+    else:
+        print(f"⚠️ Discord doc alert failed: {resp.status_code}")
+
+
+# ── Chapter structure (copy from docs_system.py) ─────────────────────────────
+# Paste the CHAPTERS dict here (same as in docs_system.py)
+CHAPTERS = {
+    1: {"title": "Introduction",                   "keywords": ["main.py","app.py","run.py","config","__init__","readme"]},
+    2: {"title": "Literature Review",              "keywords": ["research","literature","survey","related"]},
+    3: {"title": "System Requirements & Analysis", "keywords": ["schema","models","database","db","requirements","specs","config"]},
+    4: {"title": "System Design & Architecture",   "keywords": ["agent","supervisor","router","pipeline","orchestrat","architecture","workflow","coordinator","manager","dispatcher"]},
+    5: {"title": "Implementation",                 "keywords": ["tools","utils","helper","service","handler","processor","client","api","integrat","prompt","llm","groq","monitor","deploy","heal","alert","metric"]},
+    6: {"title": "Testing & Evaluation",           "keywords": ["test","eval","benchmark","validate","check","assert","mock"]},
+    7: {"title": "Conclusion & Future Work",       "keywords": ["readme","changelog","docs","conclusion","future"]},
+}
+
+
+# ── Add this to the __main__ block of fyp_agent.py ───────────────────────────
+# After update_changelog(tech, plain), add:
+#
+#   print("📚 Posting doc update alert...")
+#   changed = get_changed_files()
+#   auto_update_chapter_docs(tech, changed)
+#
+# And add this helper function:
+
+def get_changed_files() -> list:
+    """Get list of Python files changed in this commit."""
+    result = subprocess.run(
+        ["git", "diff", "HEAD~1", "HEAD", "--name-only", "--", "*.py"],
+        capture_output=True, text=True
+    )
+    return [f.strip() for f in result.stdout.strip().splitlines() if f.strip()]
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

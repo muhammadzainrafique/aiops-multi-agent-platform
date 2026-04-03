@@ -24,5 +24,8 @@ logs/
 .vscode/
 .idea/
 *.swp
-*.swo
+*.swo~
 .nix-pip
+dump.rdb
+.gitignore
+dump.rdb

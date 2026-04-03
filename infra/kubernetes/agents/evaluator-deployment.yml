@@ -12,6 +12,9 @@ spec:
     metadata:
       labels:
         app: evaluator
+      annotations:
+        prometheus.io/scrape: "false"
+        prometheus.io/port: "5001"
     spec:
       serviceAccountName: aiops-agent
       containers:

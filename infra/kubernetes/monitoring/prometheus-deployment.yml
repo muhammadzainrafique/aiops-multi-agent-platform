@@ -1,13 +1,45 @@
-# infra/kubernetes/monitoring/prometheus-deployment.yml
-# Deploys Prometheus + AlertManager into the monitoring namespace.
-
 apiVersion: v1
 kind: Namespace
 metadata:
   name: monitoring
 
 ---
-# ── ConfigMap: Prometheus config ──────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes","nodes/proxy","services","endpoints","pods"]
+    verbs: ["get","list","watch"]
+  - apiGroups: ["extensions","networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get","list","watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,21 +50,63 @@ data:
     global:
       scrape_interval: 15s
       evaluation_interval: 15s
+
     alerting:
       alertmanagers:
         - static_configs:
             - targets: ["alertmanager:9093"]
+
     rule_files:
       - /etc/prometheus/alert_rules.yml
+
     scrape_configs:
+
       - job_name: prometheus
         static_configs:
           - targets: ["localhost:9090"]
+
+      - job_name: kubernetes-nodes
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+
       - job_name: kubernetes-pods
         kubernetes_sd_configs:
           - role: pod
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+
+      - job_name: kubernetes-services
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
             action: keep
             regex: "true"
 
@@ -48,6 +122,8 @@ data:
               severity: critical
             annotations:
               summary: "Pod {{ $labels.pod }} is crash looping"
+              description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} restarted {{ $value | printf \"%.0f\" }} times in 10 minutes"
+
           - alert: PodNotReady
             expr: kube_pod_status_ready{condition="true"} == 0
             for: 5m
@@ -56,31 +132,26 @@ data:
             annotations:
               summary: "Pod {{ $labels.pod }} is not ready"
 
----
-# ── ConfigMap: AlertManager config ───────────────────────────────────────────
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: alertmanager-config
-  namespace: monitoring
-data:
-  alertmanager.yml: |
-    global:
-      resolve_timeout: 5m
-    route:
-      receiver: aiops-supervisor
-      group_by: [alertname, namespace, pod]
-      group_wait: 10s
-      group_interval: 1m
-      repeat_interval: 10m
-    receivers:
-      - name: aiops-supervisor
-        webhook_configs:
-          - url: "http://supervisor.default.svc.cluster.local:5001/webhook"
-            send_resolved: true
+      - name: resource_pressure
+        interval: 30s
+        rules:
+          - alert: HighMemoryUsage
+            expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage on {{ $labels.instance }}"
+
+          - alert: HighCPUUsage
+            expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage on {{ $labels.instance }}"
 
 ---
-# ── Prometheus Deployment ─────────────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -96,6 +167,7 @@ spec:
       labels:
         app: prometheus
     spec:
+      serviceAccountName: prometheus
       containers:
         - name: prometheus
           image: prom/prometheus:v2.51.0
@@ -108,6 +180,13 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
       volumes:
         - name: config
           configMap:
@@ -128,47 +207,13 @@ spec:
   type: ClusterIP
 
 ---
-# ── AlertManager Deployment ───────────────────────────────────────────────────
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
 metadata:
-  name: alertmanager
-  namespace: monitoring
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: alertmanager
-  template:
-    metadata:
-      labels:
-        app: alertmanager
-    spec:
-      containers:
-        - name: alertmanager
-          image: prom/alertmanager:v0.27.0
-          args:
-            - "--config.file=/etc/alertmanager/alertmanager.yml"
-          ports:
-            - containerPort: 9093
-          volumeMounts:
-            - name: config
-              mountPath: /etc/alertmanager
-      volumes:
-        - name: config
-          configMap:
-            name: alertmanager-config
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: alertmanager
-  namespace: monitoring
-spec:
-  selector:
-    app: alertmanager
-  ports:
-    - port: 9093
-      targetPort: 9093
-  type: ClusterIP
+  name: prometheus-kubelet
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/metrics", "nodes/stats", "nodes/proxy"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]

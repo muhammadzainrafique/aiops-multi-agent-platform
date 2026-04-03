@@ -89,6 +89,39 @@ def test_alert():
     result = agent.handle_alert(fake_payload)
     return jsonify(result), 200
 
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    """
+    Basic Prometheus metrics endpoint.
+    Returns incident counts in Prometheus text format.
+    """
+    from shared.utils.redis_client import STORE_INCIDENTS
+    import json
+
+    raw       = agent.redis.hgetall(STORE_INCIDENTS)
+    incidents = [json.loads(v) for v in raw.values()]
+
+    total    = len(incidents)
+    resolved = sum(1 for i in incidents if i.get("status") == "resolved")
+    open_inc = sum(1 for i in incidents if i.get("status") == "open")
+    failed   = sum(1 for i in incidents if i.get("status") == "resolution_failed")
+
+    output = f"""# HELP aiops_incidents_total Total incidents processed
+# TYPE aiops_incidents_total counter
+aiops_incidents_total {total}
+# HELP aiops_incidents_resolved Resolved incidents
+# TYPE aiops_incidents_resolved counter
+aiops_incidents_resolved {resolved}
+# HELP aiops_incidents_open Open incidents
+# TYPE aiops_incidents_open gauge
+aiops_incidents_open {open_inc}
+# HELP aiops_incidents_failed Failed resolutions
+# TYPE aiops_incidents_failed counter
+aiops_incidents_failed {failed}
+"""
+
+    from flask import Response
+    return Response(output, mimetype="text/plain")
 
 if __name__ == "__main__":
     log.info(f"Supervisor agent starting on {WEBHOOK_HOST}:{WEBHOOK_PORT}")

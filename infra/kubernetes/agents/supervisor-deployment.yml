@@ -19,6 +19,9 @@ spec:
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "5001"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5001"
     spec:
       serviceAccountName: aiops-agent
       containers:
