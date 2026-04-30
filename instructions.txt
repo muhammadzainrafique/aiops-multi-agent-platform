@@ -1,0 +1,167 @@
+╔══════════════════════════════════════════════════════════════════╗
+║           AIOps Multi-Agent Platform — Quick Start Guide         ║
+║         Muhammad Zain · Hamza Maqsood · Muhammad Farooq          ║
+║                    MUST FYP 2026                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+WHAT IS THIS?
+─────────────
+An AI-powered platform that automatically detects, diagnoses, and fixes
+Kubernetes infrastructure problems using 3 intelligent agents and Groq AI.
+
+
+REQUIREMENTS (install these first)
+────────────────────────────────────
+1. Windows with WSL2 (Ubuntu)   → https://aka.ms/wslinstall
+2. Docker Desktop               → https://docker.com/products/docker-desktop
+3. Kind (Kubernetes in Docker)  → https://kind.sigs.k8s.io/docs/user/quick-start
+4. Python 3.11+                 → https://python.org/downloads
+5. Node.js 18+                  → https://nodejs.org
+6. Free Groq API key            → https://console.groq.com  (takes 1 minute)
+
+
+FIRST TIME SETUP (do this once)
+────────────────────────────────
+Open Ubuntu (WSL2) terminal and run these commands one by one:
+
+  git clone https://github.com/muhammadzainrafique/aiops-multi-agent-platform.git
+  cd aiops-multi-agent-platform
+
+  cp .env.example .env
+  nano .env
+    → Replace: GROQ_API_KEY=your_key_here   (paste your Groq key)
+    → Replace: GROQ_MODEL=llama-3.3-70b-versatile
+    → Press Ctrl+X → Y → Enter to save
+
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install flask redis kubernetes python-dotenv groq requests pytest
+
+  kind create cluster --name aiops
+  bash scripts/setup.sh          ← deploys everything (takes 5-10 min)
+
+
+STARTING THE PLATFORM (every time)
+────────────────────────────────────
+Open 4 separate terminal windows and run one command in each:
+
+  Terminal 1:  kubectl port-forward svc/supervisor 5001:5001
+  Terminal 2:  kubectl port-forward -n monitoring svc/prometheus 9090:9090
+  Terminal 3:  kubectl port-forward -n monitoring svc/grafana 3000:3000
+  Terminal 4:  kubectl port-forward -n monitoring svc/alertmanager 9093:9093
+
+
+STARTING THE FRONTEND DASHBOARD
+─────────────────────────────────
+  cd frontend
+  npm install          (first time only)
+  npm run dev
+
+  → Open browser: http://localhost:3000
+
+
+VISUALIZING IN BROWSER
+────────────────────────
+  Dashboard (AIOps)  → http://localhost:3000        login: not required
+  Prometheus         → http://localhost:9090        login: not required
+  Grafana            → http://localhost:3000/grafana login: admin / aiops2026
+  AlertManager       → http://localhost:9093        login: not required
+
+
+TESTING THE SYSTEM (see AI in action)
+───────────────────────────────────────
+Option A — Click "Fire Alert" button on the dashboard at http://localhost:3000
+
+Option B — Run the simulation script:
+  bash scripts/simulate_failure.sh
+
+Option C — Send a single alert manually:
+  curl -X POST http://localhost:5001/test-alert \
+    -H "Content-Type: application/json" \
+    -d '{"alertname":"PodCrashLooping","namespace":"default","pod":"crash-test","severity":"critical"}'
+
+After firing: wait 10 seconds → refresh dashboard → see AI diagnosis + action taken.
+
+
+CHECKING AGENT LOGS
+────────────────────
+  kubectl logs deployment/supervisor   ← shows alerts received
+  kubectl logs deployment/evaluator    ← shows Groq AI diagnosis
+  kubectl logs deployment/resolver     ← shows actions executed
+
+
+RUNNING UNIT TESTS
+────────────────────
+  source .venv/bin/activate
+  PYTHONPATH=. pytest agents/ -v
+  → Should show: 21 passed
+
+
+SHUTTING DOWN
+──────────────
+  Press Ctrl+C in all 4 port-forward terminals
+  bash scripts/teardown.sh
+  kind delete cluster --name aiops    (optional — removes cluster entirely)
+
+
+COMMON PROBLEMS
+────────────────
+  "Connection refused on 5001"
+  → Port-forward not running. Run: kubectl port-forward svc/supervisor 5001:5001
+
+  "Pod CrashLoopBackOff"
+  → Run: kubectl logs deployment/<agent-name>
+  → Usually Redis not ready. Wait 30 seconds, agents auto-retry.
+
+  "Grafana shows No Data"
+  → Fire a simulation first: bash scripts/simulate_failure.sh
+  → Wait 15 seconds, then refresh.
+
+  "Groq model error"
+  → Update .env: GROQ_MODEL=llama-3.3-70b-versatile
+  → Then: kubectl rollout restart deployment/evaluator
+
+  "ImagePullBackOff"
+  → Run: docker pull redis:7-alpine
+  → Then: kind load docker-image redis:7-alpine --name aiops
+
+
+WHAT HAPPENS WHEN YOU FIRE AN ALERT
+──────────────────────────────────────
+  1. Supervisor receives the alert webhook
+  2. Supervisor fetches pod logs from Kubernetes
+  3. Supervisor pushes incident to Redis queue
+  4. Evaluator picks it up, sends logs to Groq AI (Llama 3.3)
+  5. Groq AI diagnoses the issue in plain English
+  6. Evaluator pushes enriched incident to Resolver queue
+  7. Resolver executes the fix:
+       - OOM/Memory issue   → patches deployment memory limits
+       - CPU issue          → patches CPU limits
+       - Crash loop         → restarts the pod
+       - Network issue      → resets NetworkPolicy + restarts pod
+       - Unknown alert      → smart fallback (restart + log)
+  8. Incident marked RESOLVED with full report
+  9. Dashboard and Grafana update automatically
+
+
+PROJECT STRUCTURE
+──────────────────
+  agents/supervisor/   → Alert intake + Kubernetes log collector
+  agents/evaluator/    → Groq AI integration + diagnosis engine
+  agents/resolver/     → Kubernetes automated remediation
+  shared/              → Shared models, Redis client, K8s client
+  infra/kubernetes/    → All Kubernetes deployment manifests
+  monitoring/          → Prometheus rules + Grafana dashboard
+  frontend/            → Next.js live dashboard
+  scripts/             → Setup, teardown, simulation scripts
+  docs/                → Architecture diagrams + user guide
+
+
+TEAM
+─────
+  Muhammad Zain     FA22-CSE-024
+  Hamza Maqsood     FA22-CSE-080
+  Muhammad Farooq   FA22-CSE-090
+  Supervisor: Engr. Waqas Riaz — MUST 2026
+
+══════════════════════════════════════════════════════════════════
