@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server';
-const SUP = process.env.SUPERVISOR_URL || 'http://localhost:5001';
-export const dynamic = 'force-dynamic';
+import { NextResponse } from 'next/server'
+const SUP = process.env.SUPERVISOR_URL || 'http://localhost:5001'
+export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
-    const r = await fetch(`${SUP}/incidents`, { cache: 'no-store' });
-    return NextResponse.json(await r.json());
+    const r = await fetch(`${SUP}/incidents`, { cache: 'no-store' })
+    return NextResponse.json(await r.json())
   } catch {
-    return NextResponse.json({ count: 0, incidents: [], error: 'offline' }, { status: 503 });
+    return NextResponse.json({ count: 0, incidents: [], error: 'offline' }, { status: 503 })
   }
 }

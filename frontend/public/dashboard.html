@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<title>AIOps Operations Centre</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --navy:#0a1628;--navy2:#112240;--navy3:#1a3a6b;
+  --blue:#2563eb;--blue-l:#eff6ff;--blue-m:#bfdbfe;
+  --green:#059669;--green-l:#ecfdf5;--green-m:#a7f3d0;
+  --amber:#b45309;--amber-l:#fffbeb;--amber-m:#fcd34d;
+  --red:#dc2626;--red-l:#fef2f2;--red-m:#fca5a5;
+  --purple:#6d28d9;--purple-l:#f5f3ff;--purple-m:#c4b5fd;
+  --teal:#0891b2;--teal-l:#ecfeff;
+  --bg:#f0f4f8;--surface:#ffffff;--surface2:#f8fafc;
+  --border:#e1e8f0;--border2:#cbd5e1;
+  --t1:#0f172a;--t2:#1e3a5f;--t3:#475569;--t4:#94a3b8;
+  --sh:0 1px 3px rgba(10,22,40,.07),0 2px 8px rgba(10,22,40,.05);
+  --sh2:0 4px 20px rgba(10,22,40,.10),0 2px 8px rgba(10,22,40,.06);
+  --sh3:0 8px 32px rgba(10,22,40,.13),0 4px 12px rgba(10,22,40,.08);
+  --r:14px;
+}
+html,body{height:100%;font-family:'Sora',sans-serif;background:var(--bg);color:var(--t1);-webkit-font-smoothing:antialiased}
+.mono{font-family:'JetBrains Mono',monospace}
+.layout{display:flex;min-height:100vh}
+.sidebar{width:72px;flex-shrink:0;background:var(--navy);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:8px;position:sticky;top:0;height:100vh;border-right:1px solid rgba(255,255,255,.06);}
+.sidebar-logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#2563eb,#0891b2);display:flex;align-items:center;justify-content:center;margin-bottom:12px;box-shadow:0 4px 14px rgba(37,99,235,.4);font-size:18px;}
+.sidebar-divider{width:32px;height:1px;background:rgba(255,255,255,.08);margin:4px 0}
+.sb-btn{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.2s;border:1px solid transparent;font-size:16px;}
+.sb-btn:hover{background:rgba(255,255,255,.06)}
+.sb-btn.active{background:rgba(37,99,235,.25);border-color:rgba(37,99,235,.45)}
+.sb-label{font-size:9px;color:rgba(255,255,255,.3);margin-top:2px;font-family:'JetBrains Mono',monospace;letter-spacing:.5px}
+.sb-dot{width:8px;height:8px;border-radius:50%;margin-top:auto;margin-bottom:8px}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 32px;height:68px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20;}
+.topbar-brand{display:flex;flex-direction:column;gap:2px}
+.topbar-brand h1{font-size:17px;font-weight:700;color:var(--navy);letter-spacing:-.3px}
+.topbar-brand p{font-size:11px;color:var(--t3);font-weight:400}
+.topbar-right{display:flex;align-items:center;gap:16px}
+.status-pill{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:99px;font-size:12px;font-weight:600;transition:.3s;}
+.status-pill.online{background:#dcfce7;border:1px solid #86efac;color:#14532d}
+.status-pill.offline{background:#fee2e2;border:1px solid #fca5a5;color:#7f1d1d}
+.time-badge{font-size:11px;color:var(--t3);font-family:'JetBrains Mono',monospace;padding:6px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px}
+.refresh-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.2s;box-shadow:var(--sh);color:var(--t3);font-size:14px;}
+.refresh-btn:hover{background:var(--blue-l);border-color:var(--blue-m);color:var(--blue)}
+.page{padding:28px 32px;display:flex;flex-direction:column;gap:24px;overflow-y:auto}
+.section-label{font-size:10px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--t4);margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.section-label::after{content:'';flex:1;height:1px;background:var(--border)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--sh);transition:.25s}
+.card:hover{box-shadow:var(--sh2)}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:24px;box-shadow:var(--sh);transition:.25s;cursor:default;position:relative;overflow:hidden;}
+.stat-card:hover{box-shadow:var(--sh2);transform:translateY(-2px)}
+.stat-card .sc-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:16px}
+.stat-card .sc-val{font-size:36px;font-weight:700;letter-spacing:-1.5px;line-height:1;margin-bottom:6px}
+.stat-card .sc-label{font-size:13px;font-weight:500;margin-bottom:4px}
+.stat-card .sc-sub{font-size:11px;color:var(--t4)}
+.sc-blue .sc-icon{background:#eff6ff;border:1px solid #bfdbfe}
+.sc-blue .sc-val{color:#1d4ed8}
+.sc-green .sc-icon{background:#ecfdf5;border:1px solid #a7f3d0}
+.sc-green .sc-val{color:#047857}
+.sc-amber .sc-icon{background:#fffbeb;border:1px solid #fde68a}
+.sc-amber .sc-val{color:#92400e}
+.sc-purple .sc-icon{background:#f5f3ff;border:1px solid #c4b5fd}
+.sc-purple .sc-val{color:#5b21b6}
+.pipeline-card{padding:28px 32px}
+.pipeline-nodes{display:flex;align-items:center;gap:0;margin-top:20px}
+.p-node{display:flex;flex-direction:column;align-items:center;flex:1;gap:8px}
+.p-node-icon{width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:22px;border:2px solid;transition:.3s;}
+.p-node-name{font-size:13px;font-weight:600;color:var(--t1)}
+.p-node-sub{font-size:11px;color:var(--t4);text-align:center}
+.p-node-status{width:8px;height:8px;border-radius:50%}
+.p-arrow{display:flex;align-items:center;padding-bottom:28px;flex-shrink:0}
+.p-arrow-line{height:2px;width:48px;position:relative;overflow:hidden;border-radius:2px}
+.p-arr{font-size:14px;margin-left:-4px}
+.mid-row{display:grid;grid-template-columns:1fr 340px;gap:16px}
+.chart-card{padding:24px}
+.chart-wrap{height:200px;position:relative;margin-top:16px}
+canvas{display:block}
+.right-col{display:flex;flex-direction:column;gap:16px}
+.mini-card{padding:20px}
+.pie-wrap{display:flex;align-items:center;gap:16px;margin-top:12px}
+.pie-legend{display:flex;flex-direction:column;gap:8px;flex:1}
+.pie-legend-item{display:flex;align-items:center;gap:8px;font-size:12px}
+.pie-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.pie-label{color:var(--t2);flex:1;font-weight:500}
+.pie-val{font-weight:700;font-family:'JetBrains Mono',monospace;font-size:13px}
+.sev-row{margin-top:12px;display:flex;flex-direction:column;gap:12px}
+.sev-item .sev-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.sev-item .sev-name{font-size:12px;font-weight:600}
+.sev-item .sev-count{font-size:12px;font-family:'JetBrains Mono',monospace;font-weight:700}
+.sev-bar-bg{height:8px;border-radius:99px;overflow:hidden}
+.sev-bar-fill{height:100%;border-radius:99px;transition:width .8s cubic-bezier(.22,1,.36,1)}
+.trigger-card{padding:20px 24px;background:linear-gradient(135deg,#eff6ff,#f0f9ff);border-color:#bfdbfe;}
+.trigger-inner{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.trigger-label{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.trigger-label-icon{width:36px;height:36px;border-radius:10px;background:#dbeafe;border:1px solid #93c5fd;display:flex;align-items:center;justify-content:center;font-size:15px}
+.trigger-label-text h3{font-size:13px;font-weight:600;color:var(--navy)}
+.trigger-label-text p{font-size:11px;color:var(--t3);margin-top:1px}
+select.alert-select{flex:1;min-width:220px;padding:10px 14px;border-radius:10px;border:1px solid #93c5fd;background:white;color:var(--t1);font-size:13px;font-family:'Sora',sans-serif;outline:none;cursor:pointer;}
+.fire-btn{padding:10px 24px;border-radius:10px;border:none;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:white;font-size:13px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;transition:.2s;display:flex;align-items:center;gap:6px;box-shadow:0 3px 12px rgba(37,99,235,.35);white-space:nowrap;}
+.fire-btn:hover{background:linear-gradient(135deg,#1d4ed8,#1e40af);box-shadow:0 4px 16px rgba(37,99,235,.45)}
+.fire-btn:disabled{opacity:.6;cursor:wait}
+.trig-msg{font-size:12px;font-family:'JetBrains Mono',monospace;padding:8px 14px;border-radius:8px}
+.trig-ok{background:#dcfce7;color:#14532d;border:1px solid #86efac}
+.trig-err{background:#fee2e2;color:#7f1d1d;border:1px solid #fca5a5}
+.feed-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.feed-title{font-size:15px;font-weight:700;color:var(--t1);display:flex;align-items:center;gap:8px}
+.feed-count{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:#dbeafe;color:#1d4ed8;font-family:'JetBrains Mono',monospace}
+.filter-row{display:flex;gap:6px}
+.filter-btn{padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);font-size:12px;font-weight:500;cursor:pointer;transition:.2s;font-family:'Sora',sans-serif;color:var(--t2)}
+.filter-btn:hover{background:var(--surface2)}
+.filter-btn.active{background:var(--navy);color:white;border-color:var(--navy)}
+.incident-list{display:flex;flex-direction:column;gap:10px}
+.inc-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:.25s;cursor:pointer;border-left:4px solid;}
+.inc-card:hover{box-shadow:var(--sh2)}
+.inc-head{padding:16px 20px;display:flex;align-items:center;gap:12px}
+.sev-badge{font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;font-family:'JetBrains Mono',monospace;flex-shrink:0;letter-spacing:.5px}
+.inc-info{flex:1;min-width:0}
+.inc-name{font-size:14px;font-weight:600;color:var(--t1)}
+.inc-pod{font-size:11px;color:var(--t3);margin-top:2px;font-family:'JetBrains Mono',monospace}
+.inc-ai-badge{font-size:10px;font-weight:500;padding:3px 8px;border-radius:6px;background:#f5f3ff;color:#5b21b6;border:1px solid #ddd6fe;flex-shrink:0;display:flex;align-items:center;gap:4px}
+.status-badge{font-size:11px;font-weight:600;padding:4px 10px;border-radius:99px;flex-shrink:0}
+.inc-time{font-size:10px;color:var(--t4);font-family:'JetBrains Mono',monospace;flex-shrink:0}
+.chevron{font-size:12px;color:var(--t4);flex-shrink:0;transition:.2s}
+.inc-detail{border-top:1px solid var(--border);padding:20px;background:var(--surface2);display:none;animation:slideDown .2s ease}
+.inc-detail.open{display:block}
+@keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.detail-meta{display:flex;gap:20px;flex-wrap:wrap;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--t3);padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.detail-block-label{font-size:10px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:5px}
+.detail-block-body{font-size:13px;line-height:1.65;padding:14px;border-radius:10px;font-weight:400}
+.logs-block{grid-column:1/-1}
+.logs-pre{font-size:11px;font-family:'JetBrains Mono',monospace;line-height:1.7;padding:14px;border-radius:10px;overflow-x:auto;background:#0f172a;color:#94a3b8;border:1px solid #1e293b;white-space:pre-wrap;word-break:break-all}
+.empty-state{text-align:center;padding:60px 20px}
+.empty-icon{font-size:48px;margin-bottom:12px;opacity:.2}
+.empty-title{font-size:15px;font-weight:600;color:var(--t2);margin-bottom:6px}
+.empty-sub{font-size:13px;color:var(--t4)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulseDot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.5}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes newHighlight{from{background:#dbeafe}to{background:var(--surface)}}
+@keyframes flowArrow{from{left:-100%}to{left:100%}}
+.fade-up{animation:fadeUp .45s cubic-bezier(.22,1,.36,1) both}
+.pulse{animation:pulseDot 2s ease-in-out infinite}
+.spinning{animation:spin 1s linear infinite;display:inline-block}
+.new-row{animation:newHighlight 2.5s ease forwards}
+.footer{text-align:center;padding:24px 32px;font-size:11px;color:var(--t4);border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;background:var(--surface)}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <div class="sidebar-logo">🛡️</div>
+  <div class="sidebar-divider"></div>
+  <div><div class="sb-btn active" title="Dashboard">📊</div><div class="sb-label">DASH</div></div>
+  <div><div class="sb-btn" title="Monitoring">📡</div><div class="sb-label">MON</div></div>
+  <div><div class="sb-btn" title="Agents">🤖</div><div class="sb-label">AGNT</div></div>
+  <div><div class="sb-btn" title="Settings">⚙️</div><div class="sb-label">CFG</div></div>
+  <div class="sb-dot pulse" id="sidebarDot" style="background:#94a3b8"></div>
+</aside>
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-brand">
+      <h1>AIOps Operations Centre</h1>
+      <p>Autonomous Multi-Agent IT Operations Platform — FYP 2026</p>
+    </div>
+    <div class="topbar-right">
+      <div class="time-badge mono" id="clock">--:-- --</div>
+      <div class="status-pill offline" id="statusPill">
+        <div class="pulse" id="statusDot" style="width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block"></div>
+        <span id="statusText">Connecting…</span>
+      </div>
+      <div class="refresh-btn" id="refreshBtn" title="Refresh (R)">↻</div>
+    </div>
+  </header>
+  <div class="page">
+    <div>
+      <div class="section-label">📈 Live Metrics</div>
+      <div class="stat-grid">
+        <div class="stat-card sc-blue fade-up" style="animation-delay:.05s">
+          <div class="sc-icon">📊</div>
+          <div class="sc-val" id="statTotal">—</div>
+          <div class="sc-label" style="color:#1e3a5f">Total Incidents</div>
+          <div class="sc-sub" id="statTotalSub">Loading…</div>
+        </div>
+        <div class="stat-card sc-green fade-up" style="animation-delay:.10s">
+          <div class="sc-icon">✅</div>
+          <div class="sc-val" id="statResolved">—</div>
+          <div class="sc-label" style="color:#065f46">Resolved</div>
+          <div class="sc-sub" id="statResolvedSub">Loading…</div>
+        </div>
+        <div class="stat-card sc-amber fade-up" style="animation-delay:.15s">
+          <div class="sc-icon">⚠️</div>
+          <div class="sc-val" id="statOpen">—</div>
+          <div class="sc-label" style="color:#78350f">Open / Active</div>
+          <div class="sc-sub" id="statOpenSub">Loading…</div>
+        </div>
+        <div class="stat-card sc-purple fade-up" style="animation-delay:.20s">
+          <div class="sc-icon">⏱️</div>
+          <div class="sc-val" id="statAvg">—</div>
+          <div class="sc-label" style="color:#4c1d95">Avg Resolution</div>
+          <div class="sc-sub">Mean time to resolve</div>
+        </div>
+      </div>
+    </div>
+    <div class="card pipeline-card fade-up" style="animation-delay:.25s">
+      <div class="section-label" style="margin-bottom:0">🔗 Agent Pipeline
+        <span id="pipelineStatus" style="margin-left:auto;font-size:10px;font-family:'JetBrains Mono',monospace"></span>
+      </div>
+      <div class="pipeline-nodes">
+        <div class="p-node">
+          <div class="p-node-icon" id="pn0" style="background:#ecfeff;border-color:#67e8f9">📡</div>
+          <div class="p-node-name">Prometheus</div>
+          <div class="p-node-sub">Alert Source</div>
+          <div class="p-node-status pulse" id="ps0" style="background:#94a3b8"></div>
+        </div>
+        <div class="p-arrow">
+          <div class="p-arrow-line" style="background:#e0f2fe" id="pa0">
+            <div style="position:absolute;top:0;left:-100%;height:100%;width:100%;background:linear-gradient(90deg,transparent,#0891b2,transparent);animation:flowArrow 1.8s linear infinite"></div>
+          </div>
+          <div class="p-arr" style="color:#0891b2">▶</div>
+        </div>
+        <div class="p-node">
+          <div class="p-node-icon" id="pn1" style="background:#eff6ff;border-color:#93c5fd">🖥️</div>
+          <div class="p-node-name">Supervisor</div>
+          <div class="p-node-sub">Webhook · Logs</div>
+          <div class="p-node-status pulse" id="ps1" style="background:#94a3b8;animation-delay:.3s"></div>
+        </div>
+        <div class="p-arrow">
+          <div class="p-arrow-line" style="background:#e0f2fe">
+            <div style="position:absolute;top:0;left:-100%;height:100%;width:100%;background:linear-gradient(90deg,transparent,#2563eb,transparent);animation:flowArrow 1.8s linear infinite .4s"></div>
+          </div>
+          <div class="p-arr" style="color:#2563eb">▶</div>
+        </div>
+        <div class="p-node">
+          <div class="p-node-icon" id="pn2" style="background:#f5f3ff;border-color:#c4b5fd">🧠</div>
+          <div class="p-node-name">Evaluator</div>
+          <div class="p-node-sub">Groq LLM · AI</div>
+          <div class="p-node-status pulse" id="ps2" style="background:#94a3b8;animation-delay:.6s"></div>
+        </div>
+        <div class="p-arrow">
+          <div class="p-arrow-line" style="background:#e0f2fe">
+            <div style="position:absolute;top:0;left:-100%;height:100%;width:100%;background:linear-gradient(90deg,transparent,#6d28d9,transparent);animation:flowArrow 1.8s linear infinite .8s"></div>
+          </div>
+          <div class="p-arr" style="color:#059669">▶</div>
+        </div>
+        <div class="p-node">
+          <div class="p-node-icon" id="pn3" style="background:#ecfdf5;border-color:#6ee7b7">🔧</div>
+          <div class="p-node-name">Resolver</div>
+          <div class="p-node-sub">K8s Remediation</div>
+          <div class="p-node-status pulse" id="ps3" style="background:#94a3b8;animation-delay:.9s"></div>
+        </div>
+      </div>
+    </div>
+    <div class="mid-row">
+      <div class="card chart-card fade-up" style="animation-delay:.3s">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between">
+          <div>
+            <div class="section-label" style="margin-bottom:4px">📈 Incident Rate — Live</div>
+            <div style="font-size:11px;color:var(--t4)">Auto-refreshes every 8 seconds</div>
+          </div>
+          <div style="display:flex;gap:14px;font-size:11px">
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:3px;background:#2563eb;border-radius:2px;display:inline-block"></span>Total</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:3px;background:#059669;border-radius:2px;display:inline-block"></span>Resolved</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:3px;background:#d97706;border-radius:2px;display:inline-block"></span>Open</span>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="lineChart" style="width:100%;height:100%"></canvas>
+          <div id="chartEmpty" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
+            <div style="font-size:28px;opacity:.15">📈</div>
+            <div style="font-size:12px;color:var(--t4)">Fire an alert to see live chart data</div>
+          </div>
+        </div>
+      </div>
+      <div class="right-col">
+        <div class="card mini-card fade-up" style="animation-delay:.35s">
+          <div class="section-label" style="margin-bottom:8px">🍩 Status Breakdown</div>
+          <div class="pie-wrap">
+            <canvas id="donutChart" width="100" height="100"></canvas>
+            <div class="pie-legend" id="pieLegend"><div style="font-size:11px;color:var(--t4)">No data yet</div></div>
+          </div>
+        </div>
+        <div class="card mini-card fade-up" style="animation-delay:.40s">
+          <div class="section-label" style="margin-bottom:8px">🎯 Severity Distribution</div>
+          <div class="sev-row">
+            <div class="sev-item">
+              <div class="sev-header">
+                <span class="sev-name" style="color:#dc2626">Critical</span>
+                <span class="sev-count" style="color:#dc2626" id="critCount">0</span>
+              </div>
+              <div class="sev-bar-bg" style="background:#fee2e2">
+                <div class="sev-bar-fill" id="critBar" style="background:linear-gradient(90deg,#dc2626,#ef4444);width:0%"></div>
+              </div>
+            </div>
+            <div class="sev-item">
+              <div class="sev-header">
+                <span class="sev-name" style="color:#d97706">Warning</span>
+                <span class="sev-count" style="color:#d97706" id="warnCount">0</span>
+              </div>
+              <div class="sev-bar-bg" style="background:#fef3c7">
+                <div class="sev-bar-fill" id="warnBar" style="background:linear-gradient(90deg,#d97706,#f59e0b);width:0%"></div>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:11px;font-family:'JetBrains Mono',monospace">
+            <span style="color:var(--t4)">Redis</span>
+            <span id="redisStatus" style="color:#94a3b8">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card trigger-card fade-up" style="animation-delay:.45s">
+      <div class="trigger-inner">
+        <div class="trigger-label">
+          <div class="trigger-label-icon">⚡</div>
+          <div class="trigger-label-text">
+            <h3>Simulate Alert</h3>
+            <p>Inject a test incident directly into the AI pipeline</p>
+          </div>
+        </div>
+        <select class="alert-select" id="alertSelect">
+          <option value="PodCrashLooping|critical">🔴 Pod Crash Loop — Critical</option>
+          <option value="HighMemoryUsage|warning">🟡 High Memory Usage — Warning</option>
+          <option value="PodNotReady|warning">🟡 Pod Not Ready — Warning</option>
+          <option value="HighCPUUsage|warning">🟡 High CPU Usage — Warning</option>
+          <option value="DeploymentUnavailable|critical">🔴 Deployment Unavailable — Critical</option>
+        </select>
+        <button class="fire-btn" id="fireBtn">⚡ Fire Alert</button>
+        <div class="trig-msg" id="trigMsg" style="display:none"></div>
+      </div>
+    </div>
+    <div class="fade-up" style="animation-delay:.5s">
+      <div class="feed-header">
+        <div class="feed-title">Incident Feed <span class="feed-count" id="feedCount">0</span></div>
+        <div class="filter-row">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="open">Open</button>
+          <button class="filter-btn" data-filter="resolved">Resolved</button>
+          <button class="filter-btn" data-filter="failed">Failed</button>
+        </div>
+      </div>
+      <div class="incident-list" id="incidentList">
+        <div class="empty-state">
+          <div class="empty-icon">📭</div>
+          <div class="empty-title">No incidents yet</div>
+          <div class="empty-sub">Fire a test alert above to see the AI pipeline in action</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer">
+    AIOps Multi-Agent Platform &nbsp;·&nbsp; Muhammad Zain (FA22-CSE-024) &nbsp;·&nbsp;
+    Hamza Maqsood (FA22-CSE-080) &nbsp;·&nbsp; Muhammad Farooq (FA22-CSE-090) &nbsp;·&nbsp;
+    MUST 2026 &nbsp;·&nbsp; Supervisor: Engr. Waqas Riaz &nbsp;·&nbsp;
+    <span id="footerTime"></span>
+  </div>
+</div>
+</div>
+<script>
+const state={incidents:[],health:null,chart:[],filter:'all',prevIds:new Set(),newIds:new Set(),online:false};
+const SEV={critical:{color:'#dc2626',bg:'#fee2e2',border:'#fca5a5'},warning:{color:'#d97706',bg:'#fef3c7',border:'#fde68a'},info:{color:'#2563eb',bg:'#dbeafe',border:'#93c5fd'}};
+const STATUS={resolved:{color:'#059669',bg:'#d1fae5',label:'Resolved'},open:{color:'#d97706',bg:'#fef3c7',label:'Open'},in_progress:{color:'#2563eb',bg:'#dbeafe',label:'In Progress'},evaluated:{color:'#6d28d9',bg:'#f5f3ff',label:'Evaluated'},evaluation_failed:{color:'#dc2626',bg:'#fee2e2',label:'Eval Failed'},resolution_failed:{color:'#dc2626',bg:'#fee2e2',label:'Res. Failed'}};
+function fmtTime(iso){return new Date(iso).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+function fmtFull(iso){return new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
+function dur(s,e){if(!e)return null;const sec=Math.round((new Date(e)-new Date(s))/1000);return sec<60?`${sec}s`:`${Math.floor(sec/60)}m ${sec%60}s`;}
+function tick(){const now=new Date();const t=now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});document.getElementById('clock').textContent=t;document.getElementById('footerTime').textContent='Last refresh: '+t;}
+setInterval(tick,1000);tick();
+async function fetchAll(){
+  try{
+    const[ir,hr]=await Promise.all([fetch('/api/incidents'),fetch('/api/health')]);
+    const id=await ir.json();const hd=await hr.json();
+    const list=id.incidents||[];
+    const inIds=new Set(list.map(i=>i.id));
+    const fresh=new Set([...inIds].filter(x=>!state.prevIds.has(x)));
+    state.newIds=fresh;state.prevIds=inIds;state.incidents=list;state.health=hd;state.online=hd.status==='healthy';
+    const now=new Date();const total=list.length;
+    const resolved=list.filter(i=>i.status==='resolved').length;
+    const open=list.filter(i=>['open','in_progress'].includes(i.status)).length;
+    state.chart.push({t:now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}),total,resolved,open});
+    if(state.chart.length>14)state.chart.shift();
+    updateUI();
+  }catch(e){state.online=false;updateStatus();}
+}
+function updateUI(){updateStatus();updateStats();updatePipeline();updateChart();updateDonut();updateSevBars();renderIncidents();}
+function updateStatus(){const on=state.online;const pill=document.getElementById('statusPill');const dot=document.getElementById('statusDot');const txt=document.getElementById('statusText');const sdot=document.getElementById('sidebarDot');pill.className='status-pill '+(on?'online':'offline');dot.style.background=on?'#059669':'#dc2626';txt.textContent=on?'System Healthy':'System Offline';sdot.style.background=on?'#059669':'#ef4444';}
+function updateStats(){const inc=state.incidents;const total=inc.length;const resolved=inc.filter(i=>i.status==='resolved').length;const open=inc.filter(i=>['open','in_progress'].includes(i.status)).length;document.getElementById('statTotal').textContent=total;document.getElementById('statTotalSub').textContent=`${inc.filter(i=>i.severity==='critical').length} critical`;document.getElementById('statResolved').textContent=resolved;document.getElementById('statResolvedSub').textContent=total>0?`${Math.round(resolved/total*100)}% resolution rate`:'No data yet';document.getElementById('statOpen').textContent=open;document.getElementById('statOpenSub').textContent=open>0?'Awaiting remediation':'All clear ✓';const times=inc.filter(i=>i.resolved_at).map(i=>(new Date(i.resolved_at)-new Date(i.created_at))/1000);if(times.length){const avg=times.reduce((a,b)=>a+b,0)/times.length;document.getElementById('statAvg').textContent=avg<60?`${avg.toFixed(0)}s`:`${(avg/60).toFixed(1)}m`;}else{document.getElementById('statAvg').textContent='—';}document.getElementById('feedCount').textContent=total;document.getElementById('redisStatus').textContent=state.health?.redis||'—';document.getElementById('redisStatus').style.color=state.health?.redis==='ok'?'#059669':'#dc2626';}
+function updatePipeline(){const on=state.online;const colors=['#0891b2','#2563eb','#6d28d9','#059669'];const bgs=['#ecfeff','#eff6ff','#f5f3ff','#ecfdf5'];const borders=['#67e8f9','#93c5fd','#c4b5fd','#6ee7b7'];for(let i=0;i<4;i++){document.getElementById('ps'+i).style.background=on?colors[i]:'#94a3b8';const icon=document.getElementById('pn'+i);icon.style.background=on?bgs[i]:'#f8fafc';icon.style.borderColor=on?borders[i]:'#e2e8f0';}document.getElementById('pipelineStatus').textContent=on?'● All Systems Operational':'○ Offline';document.getElementById('pipelineStatus').style.color=on?'#059669':'#94a3b8';}
+function updateChart(){const data=state.chart;const canvas=document.getElementById('lineChart');const empty=document.getElementById('chartEmpty');if(data.length<2){empty.style.display='flex';return;}empty.style.display='none';const wrap=canvas.parentElement;canvas.width=wrap.clientWidth||600;canvas.height=wrap.clientHeight||200;const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);const W=canvas.width,H=canvas.height;const pad={t:16,r:16,b:32,l:36};const cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;const maxY=Math.max(...data.map(d=>d.total),1);const cols=[{key:'total',color:'#2563eb'},{key:'resolved',color:'#059669'},{key:'open',color:'#d97706'}];ctx.strokeStyle='#f1f5f9';ctx.lineWidth=1;for(let i=0;i<=4;i++){const y=pad.t+ch*(1-i/4);ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+cw,y);ctx.stroke();ctx.fillStyle='#94a3b8';ctx.font='9px JetBrains Mono';ctx.textAlign='right';ctx.fillText(Math.round(maxY*i/4),pad.l-4,y+3);}const step=Math.ceil(data.length/6);data.forEach((d,i)=>{if(i%step===0||i===data.length-1){const x=pad.l+i/(data.length-1)*cw;ctx.fillStyle='#94a3b8';ctx.font='9px JetBrains Mono';ctx.textAlign='center';ctx.fillText(d.t,x,H-4);}});cols.forEach(({key,color})=>{const pts=data.map((d,i)=>({x:pad.l+i/(Math.max(data.length-1,1))*cw,y:pad.t+ch*(1-d[key]/maxY)}));const grad=ctx.createLinearGradient(0,pad.t,0,pad.t+ch);grad.addColorStop(0,color+'22');grad.addColorStop(1,color+'00');ctx.beginPath();ctx.moveTo(pts[0].x,pad.t+ch);pts.forEach(p=>ctx.lineTo(p.x,p.y));ctx.lineTo(pts[pts.length-1].x,pad.t+ch);ctx.closePath();ctx.fillStyle=grad;ctx.fill();ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.lineCap='round';pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));ctx.stroke();pts.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle='white';ctx.lineWidth=1.5;ctx.stroke();});});}
+function updateDonut(){const inc=state.incidents;const resolved=inc.filter(i=>i.status==='resolved').length;const open=inc.filter(i=>['open','in_progress'].includes(i.status)).length;const failed=inc.filter(i=>i.status?.includes('failed')).length;const data=[{label:'Resolved',val:resolved,color:'#059669'},{label:'Open',val:open,color:'#d97706'},{label:'Failed',val:failed,color:'#dc2626'}].filter(d=>d.val>0);const canvas=document.getElementById('donutChart');const ctx=canvas.getContext('2d');ctx.clearRect(0,0,100,100);const leg=document.getElementById('pieLegend');if(!data.length){ctx.beginPath();ctx.arc(50,50,36,0,Math.PI*2);ctx.strokeStyle='#e2e8f0';ctx.lineWidth=14;ctx.stroke();leg.innerHTML='<div style="font-size:11px;color:var(--t4)">No data yet</div>';return;}const total=data.reduce((a,d)=>a+d.val,0);let angle=-Math.PI/2;data.forEach(d=>{const sweep=2*Math.PI*d.val/total;ctx.beginPath();ctx.moveTo(50,50);ctx.arc(50,50,40,angle,angle+sweep);ctx.closePath();ctx.fillStyle=d.color;ctx.fill();angle+=sweep;});ctx.beginPath();ctx.arc(50,50,28,0,Math.PI*2);ctx.fillStyle='white';ctx.fill();ctx.fillStyle='#0f172a';ctx.font='bold 14px Sora';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(total,50,50);leg.innerHTML=data.map(d=>`<div class="pie-legend-item"><div class="pie-dot" style="background:${d.color}"></div><span class="pie-label">${d.label}</span><span class="pie-val" style="color:${d.color}">${d.val}</span></div>`).join('');}
+function updateSevBars(){const inc=state.incidents;const total=inc.length||1;const crit=inc.filter(i=>i.severity==='critical').length;const warn=inc.filter(i=>i.severity==='warning').length;document.getElementById('critCount').textContent=crit;document.getElementById('warnCount').textContent=warn;document.getElementById('critBar').style.width=`${crit/total*100}%`;document.getElementById('warnBar').style.width=`${warn/total*100}%`;}
+function renderIncidents(){const filter=state.filter;let list=state.incidents;if(filter==='open')list=list.filter(i=>['open','in_progress'].includes(i.status));if(filter==='resolved')list=list.filter(i=>i.status==='resolved');if(filter==='failed')list=list.filter(i=>i.status?.includes('failed'));const container=document.getElementById('incidentList');if(!list.length){container.innerHTML=`<div class="empty-state"><div class="empty-icon">📭</div><div class="empty-title">${filter==='all'?'No incidents yet':`No ${filter} incidents`}</div><div class="empty-sub">${filter==='all'?'Fire a test alert above to see the AI pipeline in action':''}</div></div>`;return;}container.innerHTML=list.map((inc,i)=>{const sev=SEV[inc.severity]||SEV.info;const st=STATUS[inc.status]||{color:'#64748b',bg:'#f1f5f9',label:inc.status};const isNew=state.newIds.has(inc.id);const resTime=dur(inc.created_at,inc.resolved_at);return`<div class="inc-card ${isNew?'new-row':''}" style="border-left-color:${sev.color};animation:slideDown .25s ease ${i*.04}s both" onclick="toggleInc(this)"><div class="inc-head"><span class="sev-badge" style="background:${sev.bg};color:${sev.color};border:1px solid ${sev.border}">${(inc.severity||'INFO').toUpperCase()}</span><div class="inc-info"><div class="inc-name">${inc.alert_name}</div><div class="inc-pod">${inc.namespace}/${inc.pod_name}</div></div>${inc.ai_diagnosis?'<span class="inc-ai-badge">🧠 AI Diagnosed</span>':''}${resTime?`<span style="font-size:10px;color:var(--t4);font-family:'JetBrains Mono',monospace">⏱ ${resTime}</span>`:''}<span class="status-badge" style="background:${st.bg};color:${st.color}">${st.label}</span><span class="inc-time">${fmtTime(inc.created_at)}</span><span class="chevron">▼</span></div><div class="inc-detail">${buildDetail(inc,resTime)}</div></div>`;}).join('');}
+function buildDetail(inc,resTime){return`<div class="detail-meta"><span><b style="color:var(--t4)">ID:</b> ${inc.id}</span><span><b style="color:var(--t4)">Created:</b> ${fmtFull(inc.created_at)}</span>${inc.resolved_at?`<span><b style="color:var(--t4)">Resolved:</b> ${fmtFull(inc.resolved_at)}</span>`:''}${resTime?`<span><b style="color:var(--t4)">Duration:</b> ${resTime}</span>`:''}</div><div class="detail-grid">${inc.ai_diagnosis?`<div class="detail-block"><div class="detail-block-label" style="color:#6d28d9">🧠 AI Diagnosis (Groq LLM)</div><div class="detail-block-body" style="background:#f5f3ff;border:1px solid #ede9fe;color:#1e1b4b">${inc.ai_diagnosis}</div></div>`:''} ${inc.recommended_action?`<div class="detail-block"><div class="detail-block-label" style="color:#1d4ed8">💡 Recommended Action</div><div class="detail-block-body" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a5f">${inc.recommended_action}</div></div>`:''} ${inc.action_taken?`<div class="detail-block"><div class="detail-block-label" style="color:#047857">🔧 Resolver Action</div><div class="detail-block-body mono" style="background:#ecfdf5;border:1px solid #a7f3d0;color:#064e3b;font-size:12px">${inc.action_taken}</div></div>`:''} ${inc.raw_logs?`<div class="logs-block"><div class="detail-block-label" style="color:#475569">📋 Raw Pod Logs</div><pre class="logs-pre">${inc.raw_logs}</pre></div>`:''}</div>`;}
+function toggleInc(card){const detail=card.querySelector('.inc-detail');const chev=card.querySelector('.chevron');const open=detail.classList.toggle('open');chev.textContent=open?'▲':'▼';}
+document.querySelectorAll('.filter-btn').forEach(btn=>{btn.addEventListener('click',()=>{document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');state.filter=btn.dataset.filter;renderIncidents();});});
+document.getElementById('fireBtn').addEventListener('click',async()=>{const btn=document.getElementById('fireBtn');const msg=document.getElementById('trigMsg');const[alertname,severity]=document.getElementById('alertSelect').value.split('|');btn.disabled=true;btn.innerHTML='<span class="spinning">↻</span> Processing…';msg.style.display='none';try{const r=await fetch('/api/trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alertname,namespace:'default',pod:'crash-test',severity})});const d=await r.json();msg.style.display='block';msg.className='trig-msg '+(d.processed?'trig-ok':'trig-err');msg.textContent=d.processed?`✓ ${d.processed} incident dispatched — AI pipeline processing`:'⚠ No incidents returned';setTimeout(fetchAll,3000);setTimeout(fetchAll,7000);}catch{msg.style.display='block';msg.className='trig-msg trig-err';msg.textContent='✗ Cannot reach Supervisor API — is port-forward running?';}btn.disabled=false;btn.innerHTML='⚡ Fire Alert';setTimeout(()=>{msg.style.display='none';},8000);});
+document.getElementById('refreshBtn').addEventListener('click',fetchAll);
+document.addEventListener('keydown',e=>{if((e.key==='r'||e.key==='R')&&!e.target.matches('input,select,textarea'))fetchAll();});
+fetchAll();
+setInterval(fetchAll,8000);
+</script>
+</body>
+</html>

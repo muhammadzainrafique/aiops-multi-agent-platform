@@ -3,9 +3,10 @@ const SUP = process.env.SUPERVISOR_URL || 'http://localhost:5001'
 export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
-    const r = await fetch(`${SUP}/health`, { cache: 'no-store' })
-    return NextResponse.json(await r.json())
+    const r = await fetch(`${SUP}/metrics`, { cache: 'no-store' })
+    const text = await r.text()
+    return NextResponse.json({ raw: text })
   } catch {
-    return NextResponse.json({ status: 'offline', redis: 'unreachable' }, { status: 503 })
+    return NextResponse.json({ raw: '' }, { status: 503 })
   }
 }
