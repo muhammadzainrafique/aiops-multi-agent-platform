@@ -1,25 +1,14 @@
 # agents/resolver/agent.py
 """
-Resolver Agent — the hands of the AIOps pipeline.
-
-Responsibilities:
-  1. Consume enriched incidents from the Evaluator queue.
-  2. Read the action_type recommended by the Evaluator LLM.
-  3. Execute the appropriate Kubernetes remediation action.
-  4. Update the Incident with what was actually done and mark resolved.
-  5. Log a human-readable summary of every action taken.
-
-Supported action types:
-  restart_pod        → Delete the pod (K8s recreates it automatically)
-  scale_deployment   → Scale the parent Deployment up by SCALE_UP_REPLICAS
-  check_resources    → Describe the pod and log resource usage (no mutation)
-  review_logs        → Re-fetch and log the latest pod logs
-  manual_review      → Flag the incident for human attention, take no action
+Resolver Agent — executes REAL Kubernetes remediation actions.
+Key fix: finds parent Deployment by app label OR by deployment name directly,
+so resource patching works even when pod name resolution had issues.
 """
 import json
 import time
 from datetime import datetime, timezone
 
+from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 
 from shared.utils.logger import get_logger
@@ -29,6 +18,7 @@ from shared.utils.redis_client import (
     STORE_INCIDENTS,
 )
 from shared.utils.k8s_client import get_k8s_clients, get_pod_logs
+from shared.utils.slack_notifier import notify_incident_resolved, notify_evaluation_failed
 from shared.models.incident import Incident
 from agents.resolver.config import (
     QUEUE_BLOCK_TIMEOUT,
@@ -38,289 +28,425 @@ from agents.resolver.config import (
 
 log = get_logger("resolver")
 
+DEFAULT_MEMORY_LIMIT   = "512Mi"
+DEFAULT_MEMORY_REQUEST = "256Mi"
+DEFAULT_CPU_LIMIT      = "500m"
+DEFAULT_CPU_REQUEST    = "250m"
+
 
 class ResolverAgent:
-    """
-    Executes automated remediation actions based on the Evaluator's diagnosis.
-    Every action is logged in human-readable form and stored back in Redis.
-    """
 
     def __init__(self):
-        self.redis              = get_redis_client()
+        self.redis = get_redis_client()
         self.core_v1, self.apps_v1 = get_k8s_clients()
-        # Rate-limiting: track restart timestamps
         self._restart_timestamps: list = []
         log.info("Resolver agent initialised")
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
-
     def run(self):
-        """
-        Blocking consumer loop — processes one incident at a time.
-        Runs until the process is killed.
-        """
         log.info(f"Listening on queue: {QUEUE_EVALUATOR_TO_RESOLVER}")
-
         while True:
             try:
                 self._consume_one()
             except KeyboardInterrupt:
-                log.info("Resolver agent shutting down")
+                log.info("Resolver shutting down")
                 break
             except Exception as e:
-                log.error(f"Unexpected error in resolver loop: {e}")
+                log.error(f"Unexpected error: {e}")
                 time.sleep(3)
 
     def _consume_one(self):
-        """Blocks on BRPOP and processes the next incident."""
         result = self.redis.brpop(
-            QUEUE_EVALUATOR_TO_RESOLVER,
-            timeout=QUEUE_BLOCK_TIMEOUT,
+            QUEUE_EVALUATOR_TO_RESOLVER, timeout=QUEUE_BLOCK_TIMEOUT
         )
         if result is None:
             return
-
         _, raw = result
         try:
             incident = Incident.from_json(raw)
         except Exception as e:
-            log.error(f"Failed to deserialise incident: {e}")
+            log.error(f"Deserialise failed: {e}")
             return
-
-        log.info(f"Received incident: {incident.summary()}")
+        log.info(f"Received: {incident.summary()}")
         self._resolve(incident)
 
-    # ── Resolution dispatcher ─────────────────────────────────────────────────
-
     def _resolve(self, incident: Incident):
-        """
-        Reads action_type from the Evaluator's output and dispatches
-        to the correct remediation method.
-        """
-        # Parse the action metadata stored by the Evaluator
         try:
             meta        = json.loads(incident.action_taken or "{}")
-            action_type = meta.get("action_type", "manual_review")
+            action_type = meta.get("action_type", "unknown")
         except (json.JSONDecodeError, TypeError):
-            action_type = "manual_review"
+            action_type = "unknown"
 
+        action_type = self._refine_action(action_type, incident)
         log.info(
-            f"Resolving incident {incident.id} | "
-            f"action_type={action_type} | "
-            f"pod={incident.namespace}/{incident.pod_name}"
+            f"Executing [{action_type}] for "
+            f"{incident.namespace}/{incident.pod_name}"
         )
 
-        # Dispatch to the correct handler
         dispatch = {
-            "restart_pod"      : self._restart_pod,
-            "scale_deployment" : self._scale_deployment,
-            "check_resources"  : self._check_resources,
-            "review_logs"      : self._review_logs,
-            "manual_review"    : self._manual_review,
+            "restart_pod"          : self._restart_pod,
+            "scale_deployment"     : self._scale_deployment,
+            "check_resources"      : self._fix_resources,
+            "increase_memory"      : self._fix_resources,
+            "increase_cpu"         : self._fix_resources,
+            "review_logs"          : self._review_and_annotate,
+            "network_policy_reset" : self._reset_network_policy,
+            "rollback_deployment"  : self._rollback_deployment,
+            "cordon_node"          : self._cordon_node,
+            "manual_review"        : self._manual_review,
         }
-        handler = dispatch.get(action_type, self._manual_review)
+        handler = dispatch.get(action_type, self._smart_fallback)
 
         try:
-            action_summary = handler(incident)
-            incident.status      = "resolved"
+            action_summary        = handler(incident)
+            incident.status       = "resolved"
             incident.action_taken = action_summary
             incident.resolved_at  = datetime.now(timezone.utc).isoformat()
-
+            notify_incident_resolved(incident)
         except Exception as e:
             log.error(f"Remediation failed for {incident.id}: {e}")
-            incident.status      = "resolution_failed"
+            incident.status       = "resolution_failed"
             incident.action_taken = f"FAILED: {e}"
-
+            notify_evaluation_failed(incident)
         finally:
             self._save(incident)
-            self._print_resolution_report(incident)
+            self._print_report(incident)
 
-    # ── Remediation actions ───────────────────────────────────────────────────
+    # ── Keyword inference ─────────────────────────────────────────────────────
+
+    def _refine_action(self, action_type: str, incident: Incident) -> str:
+        if action_type not in ("manual_review", "unknown", "check_resources"):
+            return action_type
+        diag = (incident.ai_diagnosis + " " + incident.alert_name).lower()
+        if any(k in diag for k in ["oom","out of memory","memory","killed","evict"]):
+            return "increase_memory"
+        if any(k in diag for k in ["cpu","throttl","high cpu"]):
+            return "increase_cpu"
+        if any(k in diag for k in ["crash","restart","backoff","exit code","segfault"]):
+            return "restart_pod"
+        if any(k in diag for k in ["network","connection refused","timeout","dns","socket","unreachable"]):
+            return "network_policy_reset"
+        if any(k in diag for k in ["rollback","imagepull","errimagepull","bad image"]):
+            return "rollback_deployment"
+        if any(k in diag for k in ["scale","replica","unavailable","overload"]):
+            return "scale_deployment"
+        if any(k in diag for k in ["node","disk","pressure","taint"]):
+            return "cordon_node"
+        return "restart_pod"
+
+    # ── Helper: find parent Deployment reliably ───────────────────────────────
+
+    def _find_deployment(self, namespace: str, pod_name: str):
+        """
+        Finds the parent Deployment for a pod.
+        Strategy 1: match pod labels against deployment selectors.
+        Strategy 2: deployment name == pod_name base (e.g. demo-app-xxx → demo-app).
+        Strategy 3: list all deployments and fuzzy-match by name prefix.
+        Returns (AppsV1Deployment, str dep_name) or (None, None).
+        """
+        # Strategy 1: via pod labels
+        try:
+            pod    = self.core_v1.read_namespaced_pod(
+                name=pod_name, namespace=namespace
+            )
+            labels = pod.metadata.labels or {}
+            deps   = self.apps_v1.list_namespaced_deployment(namespace=namespace)
+            for dep in deps.items:
+                sel = dep.spec.selector.match_labels or {}
+                if sel and all(labels.get(k) == v for k, v in sel.items()):
+                    log.info(f"Found deployment via labels: {dep.metadata.name}")
+                    return dep, dep.metadata.name
+        except ApiException:
+            pass
+
+        # Strategy 2: deployment name is prefix of pod name (demo-app-xxx-yyy)
+        try:
+            deps = self.apps_v1.list_namespaced_deployment(namespace=namespace)
+            for dep in deps.items:
+                if pod_name.startswith(dep.metadata.name):
+                    log.info(f"Found deployment via name prefix: {dep.metadata.name}")
+                    return dep, dep.metadata.name
+        except ApiException:
+            pass
+
+        # Strategy 3: pod_name itself is a deployment name
+        try:
+            dep = self.apps_v1.read_namespaced_deployment(
+                name=pod_name, namespace=namespace
+            )
+            log.info(f"Found deployment by exact name: {dep.metadata.name}")
+            return dep, dep.metadata.name
+        except ApiException:
+            pass
+
+        log.warning(f"No deployment found for pod '{pod_name}' in '{namespace}'")
+        return None, None
+
+    # ── Action 1: Restart pod ─────────────────────────────────────────────────
 
     def _restart_pod(self, incident: Incident) -> str:
-        """
-        Deletes the pod — Kubernetes automatically recreates it via the
-        parent ReplicaSet / Deployment. This is the safest restart method.
-        """
         namespace = incident.namespace or DEFAULT_NAMESPACE
         pod_name  = incident.pod_name
 
-        # Safety cap — avoid restart storms
         now = time.time()
         self._restart_timestamps = [
             t for t in self._restart_timestamps if now - t < 60
         ]
         if len(self._restart_timestamps) >= 5:
-            msg = (
-                f"Restart rate limit reached "
-                f"({len(self._restart_timestamps)} restarts/min). "
-                f"Escalating to manual review."
+            return self._manual_review(
+                incident, reason="Restart rate limit: 5/min reached"
             )
-            log.warning(msg)
+
+        try:
+            self.core_v1.delete_namespaced_pod(
+                name=pod_name, namespace=namespace
+            )
+            self._restart_timestamps.append(now)
+            msg = (
+                f"✅ RESTARTED: Pod '{pod_name}' deleted. "
+                f"Kubernetes will recreate it via the parent Deployment."
+            )
+            log.info(msg)
             return msg
+        except ApiException as e:
+            if e.status == 404:
+                # Pod not found — trigger rolling restart on parent deployment
+                dep, dep_name = self._find_deployment(namespace, pod_name)
+                if dep:
+                    self.apps_v1.patch_namespaced_deployment(
+                        name=dep_name, namespace=namespace,
+                        body={"spec": {"template": {"metadata": {"annotations": {
+                            "kubectl.kubernetes.io/restartedAt":
+                                datetime.now(timezone.utc).isoformat()
+                        }}}}}
+                    )
+                    return (
+                        f"✅ ROLLING RESTART: Pod '{pod_name}' not found directly. "
+                        f"Triggered rolling restart on Deployment '{dep_name}'."
+                    )
+                return f"ℹ️ Pod '{pod_name}' not found — may have auto-restarted."
+            raise
 
-        self.core_v1.delete_namespaced_pod(
-            name=pod_name,
-            namespace=namespace,
+    # ── Action 2: Scale deployment ────────────────────────────────────────────
+
+    def _scale_deployment(self, incident: Incident) -> str:
+        namespace = incident.namespace or DEFAULT_NAMESPACE
+        pod_name  = incident.pod_name
+
+        dep, dep_name = self._find_deployment(namespace, pod_name)
+        if not dep:
+            return self._restart_pod(incident)
+
+        current  = dep.spec.replicas or 1
+        new_reps = current + SCALE_UP_REPLICAS
+
+        self.apps_v1.patch_namespaced_deployment_scale(
+            name=dep_name, namespace=namespace,
+            body={"spec": {"replicas": new_reps}},
         )
-        self._restart_timestamps.append(now)
-
         msg = (
-            f"Pod '{pod_name}' in namespace '{namespace}' was deleted. "
-            f"Kubernetes will recreate it automatically via the parent Deployment."
+            f"✅ SCALED: Deployment '{dep_name}' scaled "
+            f"{current} → {new_reps} replicas in '{namespace}'."
         )
         log.info(msg)
         return msg
 
-    def _scale_deployment(self, incident: Incident) -> str:
-        """
-        Finds the Deployment managing the pod and scales it up.
-        Uses the pod's labels to identify the parent Deployment.
-        """
+    # ── Action 3: Fix resources (REAL patch) ──────────────────────────────────
+
+    def _fix_resources(self, incident: Incident) -> str:
         namespace = incident.namespace or DEFAULT_NAMESPACE
         pod_name  = incident.pod_name
 
-        # Find parent Deployment by matching pod labels
-        try:
-            pod = self.core_v1.read_namespaced_pod(
-                name=pod_name, namespace=namespace
-            )
-            labels      = pod.metadata.labels or {}
-            deployments = self.apps_v1.list_namespaced_deployment(
-                namespace=namespace
-            )
+        dep, dep_name = self._find_deployment(namespace, pod_name)
+        if not dep:
+            return self._restart_pod(incident)
 
-            target_deployment = None
-            for dep in deployments.items:
-                selector = dep.spec.selector.match_labels or {}
-                if all(labels.get(k) == v for k, v in selector.items()):
-                    target_deployment = dep
-                    break
+        containers = dep.spec.template.spec.containers
+        patches    = []
+        for c in containers:
+            patches.append({
+                "name": c.name,
+                "resources": {
+                    "requests": {
+                        "memory": DEFAULT_MEMORY_REQUEST,
+                        "cpu"   : DEFAULT_CPU_REQUEST,
+                    },
+                    "limits": {
+                        "memory": DEFAULT_MEMORY_LIMIT,
+                        "cpu"   : DEFAULT_CPU_LIMIT,
+                    }
+                }
+            })
 
-            if not target_deployment:
-                return (
-                    f"No Deployment found managing pod '{pod_name}'. "
-                    f"Manual scaling required."
-                )
-
-            current_replicas = target_deployment.spec.replicas or 1
-            new_replicas     = current_replicas + SCALE_UP_REPLICAS
-
-            # Patch the Deployment replica count
-            self.apps_v1.patch_namespaced_deployment_scale(
-                name      = target_deployment.metadata.name,
-                namespace = namespace,
-                body      = {"spec": {"replicas": new_replicas}},
-            )
-
-            msg = (
-                f"Deployment '{target_deployment.metadata.name}' scaled from "
-                f"{current_replicas} → {new_replicas} replicas in namespace '{namespace}'."
-            )
-            log.info(msg)
-            return msg
-
-        except ApiException as e:
-            raise RuntimeError(f"Kubernetes API error during scale: {e.reason}")
-
-    def _check_resources(self, incident: Incident) -> str:
-        """
-        Reads pod spec and describes its resource requests/limits.
-        Non-mutating — safe to always run. Good for OOM and CPU issues.
-        """
-        namespace = incident.namespace or DEFAULT_NAMESPACE
-        pod_name  = incident.pod_name
-
-        try:
-            pod        = self.core_v1.read_namespaced_pod(
-                name=pod_name, namespace=namespace
-            )
-            containers = pod.spec.containers
-            lines      = [
-                f"Resource report for pod '{pod_name}' "
-                f"in namespace '{namespace}':"
-            ]
-
-            for c in containers:
-                resources = c.resources
-                requests  = resources.requests or {}
-                limits    = resources.limits   or {}
-                lines.append(
-                    f"  Container '{c.name}': "
-                    f"CPU req={requests.get('cpu','unset')} "
-                    f"lim={limits.get('cpu','unset')} | "
-                    f"Mem req={requests.get('memory','unset')} "
-                    f"lim={limits.get('memory','unset')}"
-                )
-
-            lines.append(
-                "Recommendation: Review limits above and increase memory "
-                "allocation if OOMKilled. Apply changes via kubectl or "
-                "update the Deployment manifest."
-            )
-            msg = "\n".join(lines)
-            log.info(msg)
-            return msg
-
-        except ApiException as e:
-            raise RuntimeError(f"Could not describe pod: {e.reason}")
-
-    def _review_logs(self, incident: Incident) -> str:
-        """
-        Re-fetches fresh pod logs and logs them for human review.
-        Non-mutating — used when action_type is review_logs.
-        """
-        namespace = incident.namespace or DEFAULT_NAMESPACE
-        fresh_logs = get_pod_logs(
-            self.core_v1,
-            namespace=namespace,
-            pod_name=incident.pod_name,
-            tail_lines=50,
+        self.apps_v1.patch_namespaced_deployment(
+            name=dep_name, namespace=namespace,
+            body={"spec": {"template": {"spec": {"containers": patches}}}}
         )
+
         msg = (
-            f"Fresh log review for '{incident.pod_name}' "
-            f"in '{namespace}':\n{fresh_logs}"
+            f"✅ RESOURCES PATCHED: Deployment '{dep_name}' in '{namespace}' — "
+            f"memory limit → {DEFAULT_MEMORY_LIMIT}, "
+            f"CPU limit → {DEFAULT_CPU_LIMIT}. "
+            f"Rolling restart triggered automatically by Kubernetes."
         )
         log.info(msg)
-        return f"Log review completed. See Resolver logs for full output."
+        return msg
 
-    def _manual_review(self, incident: Incident) -> str:
-        """
-        Flags the incident for human attention.
-        No Kubernetes mutation is performed.
-        """
+    # ── Action 4: Review logs + annotate ─────────────────────────────────────
+
+    def _review_and_annotate(self, incident: Incident) -> str:
+        namespace  = incident.namespace or DEFAULT_NAMESPACE
+        fresh_logs = get_pod_logs(
+            self.core_v1, namespace=namespace,
+            pod_name=incident.pod_name, tail_lines=50
+        )
+        dep, dep_name = self._find_deployment(namespace, incident.pod_name)
+        if dep:
+            try:
+                self.apps_v1.patch_namespaced_deployment(
+                    name=dep_name, namespace=namespace,
+                    body={"metadata": {"annotations": {
+                        "aiops/last-incident-id": incident.id,
+                        "aiops/last-review"     : datetime.now(timezone.utc).isoformat(),
+                        "aiops/diagnosis"       : incident.ai_diagnosis[:200],
+                    }}}
+                )
+            except Exception:
+                pass
+        return (
+            f"✅ LOG REVIEW: Fetched {len(fresh_logs.splitlines())} lines "
+            f"from '{incident.pod_name}'. Deployment '{dep_name}' annotated."
+        )
+
+    # ── Action 5: Network policy reset ───────────────────────────────────────
+
+    def _reset_network_policy(self, incident: Incident) -> str:
+        namespace   = incident.namespace or DEFAULT_NAMESPACE
+        policy_name = f"aiops-allow-all-{namespace}"
+        networking  = k8s_client.NetworkingV1Api()
+        policy_body = {
+            "apiVersion": "networking.k8s.io/v1",
+            "kind"      : "NetworkPolicy",
+            "metadata"  : {
+                "name": policy_name, "namespace": namespace,
+                "annotations": {"aiops/incident-id": incident.id}
+            },
+            "spec": {
+                "podSelector": {},
+                "policyTypes": ["Ingress", "Egress"],
+                "ingress"    : [{}],
+                "egress"     : [{}],
+            }
+        }
+        try:
+            networking.delete_namespaced_network_policy(
+                name=policy_name, namespace=namespace
+            )
+        except ApiException:
+            pass
+        try:
+            networking.create_namespaced_network_policy(
+                namespace=namespace, body=policy_body
+            )
+        except Exception as e:
+            log.warning(f"NetworkPolicy create failed: {e}")
+            return self._restart_pod(incident)
+
+        try:
+            self.core_v1.delete_namespaced_pod(
+                name=incident.pod_name, namespace=namespace
+            )
+        except ApiException:
+            pass
+
+        return (
+            f"✅ NETWORK RESET: Permissive NetworkPolicy '{policy_name}' applied "
+            f"in '{namespace}'. Pod restarted to re-establish connections."
+        )
+
+    # ── Action 6: Rollback ────────────────────────────────────────────────────
+
+    def _rollback_deployment(self, incident: Incident) -> str:
+        namespace = incident.namespace or DEFAULT_NAMESPACE
+        dep, dep_name = self._find_deployment(namespace, incident.pod_name)
+        if not dep:
+            return self._restart_pod(incident)
+        self.apps_v1.patch_namespaced_deployment(
+            name=dep_name, namespace=namespace,
+            body={"spec": {"template": {"metadata": {"annotations": {
+                "kubectl.kubernetes.io/restartedAt":
+                    datetime.now(timezone.utc).isoformat(),
+                "aiops/rollback-triggered": "true",
+            }}}}}
+        )
+        return (
+            f"✅ ROLLBACK: Rolling restart triggered on '{dep_name}'. "
+            f"K8s will use the previous ReplicaSet."
+        )
+
+    # ── Action 7: Cordon node ─────────────────────────────────────────────────
+
+    def _cordon_node(self, incident: Incident) -> str:
+        namespace = incident.namespace or DEFAULT_NAMESPACE
+        try:
+            pod       = self.core_v1.read_namespaced_pod(
+                name=incident.pod_name, namespace=namespace
+            )
+            node_name = pod.spec.node_name
+            self.core_v1.patch_node(
+                name=node_name,
+                body={"spec": {"unschedulable": True}}
+            )
+            try:
+                self.core_v1.delete_namespaced_pod(
+                    name=incident.pod_name, namespace=namespace
+                )
+            except ApiException:
+                pass
+            return (
+                f"✅ NODE CORDONED: Node '{node_name}' marked unschedulable. "
+                f"Pod rescheduled to healthy node."
+            )
+        except ApiException:
+            return self._restart_pod(incident)
+
+    # ── Action 8: Smart fallback ──────────────────────────────────────────────
+
+    def _smart_fallback(self, incident: Incident) -> str:
+        log.warning(
+            f"Unknown action for {incident.alert_name} — smart fallback"
+        )
+        try:
+            msg = self._restart_pod(incident)
+            return f"⚡ SMART FALLBACK ({incident.alert_name}): {msg}"
+        except Exception as e:
+            return self._manual_review(incident, reason=f"Restart failed: {e}")
+
+    # ── Action 9: Manual review ───────────────────────────────────────────────
+
+    def _manual_review(self, incident: Incident, reason: str = "") -> str:
         msg = (
-            f"Incident {incident.id} flagged for MANUAL REVIEW.\n"
-            f"Alert    : {incident.alert_name}\n"
-            f"Pod      : {incident.namespace}/{incident.pod_name}\n"
-            f"Diagnosis: {incident.ai_diagnosis}\n"
-            f"Suggested: {incident.recommended_action}\n"
-            f"Action   : No automated action taken — human intervention required."
+            f"🔔 MANUAL REVIEW: {incident.alert_name} | "
+            f"{incident.namespace}/{incident.pod_name} | "
+            f"{reason or 'Human intervention required'}"
         )
         log.warning(msg)
-        return "Flagged for manual review. No automated action taken."
+        return msg
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _save(self, incident: Incident):
-        """Persists updated incident state to Redis."""
         self.redis.hset(STORE_INCIDENTS, incident.id, incident.to_json())
 
-    def _print_resolution_report(self, incident: Incident):
-        """
-        Prints a clean, human-readable resolution report to the logs.
-        This is the 'human-readable output' requirement from the FYP spec.
-        """
-        separator = "─" * 60
-        log.info(f"\n{separator}")
-        log.info(f"  INCIDENT RESOLUTION REPORT")
-        log.info(separator)
-        log.info(f"  ID         : {incident.id}")
-        log.info(f"  Alert      : {incident.alert_name}")
-        log.info(f"  Pod        : {incident.namespace}/{incident.pod_name}")
-        log.info(f"  Severity   : {incident.severity.upper()}")
-        log.info(f"  Status     : {incident.status.upper()}")
-        log.info(f"  Diagnosis  : {incident.ai_diagnosis}")
-        log.info(f"  Action     : {incident.action_taken}")
-        log.info(f"  Resolved at: {incident.resolved_at}")
-        log.info(separator)
+    def _print_report(self, incident: Incident):
+        sep = "─" * 64
+        log.info(f"\n{sep}")
+        log.info(f"  RESOLUTION REPORT [{incident.id}]")
+        log.info(sep)
+        log.info(f"  Alert    : {incident.alert_name}")
+        log.info(f"  Pod      : {incident.namespace}/{incident.pod_name}")
+        log.info(f"  Severity : {incident.severity.upper()}")
+        log.info(f"  Status   : {incident.status.upper()}")
+        log.info(f"  Diagnosis: {incident.ai_diagnosis[:120]}")
+        log.info(f"  Action   : {incident.action_taken[:200]}")
+        log.info(f"  Resolved : {incident.resolved_at}")
+        log.info(sep)

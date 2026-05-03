@@ -1,0 +1,97 @@
+# A real Python web app with intentionally TIGHT resource limits
+# so our agents can detect and fix real resource exhaustion
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: default
+  labels:
+    app: demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+        - name: demo-app
+          image: python:3.11-slim
+          command: ["python3", "-c"]
+          args:
+            - |
+              import http.server, threading, time, os, logging
+              logging.basicConfig(level=logging.INFO,
+                format='%(asctime)s %(levelname)s %(message)s')
+              log = logging.getLogger("demo-app")
+
+              store = []   # intentional memory leak for demo
+
+              class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                  if self.path == '/health':
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'OK')
+                  elif self.path == '/stress-memory':
+                    # Allocate 50MB per call
+                    store.append('x' * 50 * 1024 * 1024)
+                    log.warning(f"MEMORY STRESS: allocated {len(store)*50}MB total")
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(f'Allocated {len(store)*50}MB'.encode())
+                  elif self.path == '/stress-cpu':
+                    # Burn CPU for 5 seconds
+                    log.warning("CPU STRESS: burning CPU for 5 seconds")
+                    end = time.time() + 5
+                    while time.time() < end:
+                      _ = [i**2 for i in range(10000)]
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'CPU stress done')
+                  elif self.path == '/crash':
+                    log.error("FATAL: simulated application crash")
+                    log.error("ERROR: out of memory - killed by OOM killer")
+                    log.error("SIGKILL received - process terminating")
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'Crashing now...')
+                    threading.Thread(target=lambda: os._exit(1)).start()
+                  else:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'Demo App Running')
+                def log_message(self, format, *args): pass
+
+              log.info("Demo app started on port 8080")
+              http.server.HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+          ports:
+            - containerPort: 8080
+          # TIGHT limits — easy to trigger OOM
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"    # Only 128MB — our agents will increase this
+              cpu: "100m"        # Only 0.1 CPU — our agents will increase this
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+  namespace: default
+spec:
+  selector:
+    app: demo-app
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
